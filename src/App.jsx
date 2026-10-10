@@ -115,11 +115,27 @@ function getClientId() {
   return clientId;
 }
 
+function mergeMessages(...groups) {
+  const byId = new Map();
+
+  for (const group of groups) {
+    for (const message of group) {
+      byId.set(message.id, message);
+    }
+  }
+
+  return [...byId.values()].sort(
+    (left, right) => new Date(left.createdAt) - new Date(right.createdAt),
+  );
+}
+
 function Chat() {
   const { roomId } = useParams();
   const query = new URLSearchParams(window.location.search);
   const name = query.get("name")?.trim() || "Friend";
-  const clientId = getClientId();
+  // Read localStorage synchronously once, before the effect creates a socket.
+  // Keep the identity fixed for this mounted chat session.
+  const [clientId] = useState(getClientId);
 
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -136,48 +152,75 @@ function Chat() {
   useEffect(() => {
     const socket = io(SERVER_URL, {
       transports: ["websocket", "polling"],
+      autoConnect: false,
     });
 
     socketRef.current = socket;
 
-    socket.on("connect", () => {
+    let connectionGeneration = 0;
+
+    function handleConnect() {
+      const generation = ++connectionGeneration;
+      setConnected(false);
+      setError("");
+
       socket.emit("join-room", { roomId, name, clientId }, (result) => {
+        if (!socket.connected || generation !== connectionGeneration) return;
+
         if (!result?.success) {
           setError(result?.error || "Could not join this room.");
           return;
         }
 
-        setMessages(result.messages || []);
+        // Merge the server snapshot with live messages that may have arrived
+        // while the join acknowledgement was in flight.
+        setMessages((current) => mergeMessages(result.messages || [], current));
 
         const other = result.users.find((user) => user.socketId !== socket.id);
         setPartnerName(other?.name || "");
         setConnected(true);
       });
-    });
+    }
 
-    socket.on("new-message", (message) => {
-      setMessages((current) => [...current, message]);
-    });
+    function handleNewMessage(message) {
+      setMessages((current) => mergeMessages(current, [message]));
+    }
 
-    socket.on("user-joined", (user) => {
+    function handleUserJoined(user) {
       setPartnerName(user.name);
-    });
+    }
 
-    socket.on("user-left", () => {
+    function handleUserLeft() {
       setPartnerName("");
       setTypingName("");
-    });
+    }
 
-    socket.on("typing", ({ name: typingUser, isTyping }) => {
+    function handleTyping({ name: typingUser, isTyping }) {
       setTypingName(isTyping ? typingUser : "");
-    });
+    }
 
-    socket.on("disconnect", () => {
+    function handleDisconnect() {
+      connectionGeneration += 1;
       setConnected(false);
-    });
+    }
+
+    socket.on("connect", handleConnect);
+    socket.on("new-message", handleNewMessage);
+    socket.on("user-joined", handleUserJoined);
+    socket.on("user-left", handleUserLeft);
+    socket.on("typing", handleTyping);
+    socket.on("disconnect", handleDisconnect);
+    socket.connect();
 
     return () => {
       clearTimeout(typingTimerRef.current);
+      socket.off("connect", handleConnect);
+      socket.off("new-message", handleNewMessage);
+      socket.off("user-joined", handleUserJoined);
+      socket.off("user-left", handleUserLeft);
+      socket.off("typing", handleTyping);
+      socket.off("disconnect", handleDisconnect);
+      if (socketRef.current === socket) socketRef.current = null;
       socket.disconnect();
     };
   }, [roomId, name, clientId]);
@@ -230,6 +273,8 @@ function Chat() {
       setError("Copy failed. You can copy the link from your browser.");
     }
   }
+
+  if (!clientId) return null;
 
   if (error) {
     return (
