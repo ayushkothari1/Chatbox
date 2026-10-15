@@ -26,11 +26,19 @@ const io = new Server(httpServer, {
 const rooms = new Map();
 
 function makeRoomId() {
-  return crypto.randomBytes(4).toString("hex");
+  return crypto.randomBytes(16).toString("hex");
 }
 
-function cleanName(name) {
-  return String(name || "Friend").trim().slice(0, 24) || "Friend";
+function validName(value) {
+  if (typeof value !== "string") return null;
+  const name = value.trim();
+  return name.length > 0 && name.length <= 24 && !/[\u0000-\u001f\u007f]/.test(name)
+    ? name
+    : null;
+}
+
+function publicUsers(room) {
+  return [...room.users.values()].map(({ clientId, name }) => ({ clientId, name }));
 }
 
 app.get("/api/health", (_req, res) => {
@@ -66,52 +74,82 @@ app.get(/.*/, (_req, res, next) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("join-room", ({ roomId, name, clientId }, callback) => {
+  socket.on("join-room", (payload, callback) => {
+    const { roomId, name, clientId } = payload || {};
     const room = rooms.get(roomId);
 
-    if (!room) {
+    if (typeof roomId !== "string" || !/^[a-f0-9]{32}$/.test(roomId) || !room) {
       callback?.({ success: false, error: "Room not found." });
       return;
     }
 
-    const stableClientId = String(clientId || "").trim();
-    if (!stableClientId || stableClientId.length > 100) {
+    const stableClientId = typeof clientId === "string" ? clientId.trim() : "";
+    if (!/^[a-f0-9-]{36}$/i.test(stableClientId)) {
       callback?.({ success: false, error: "A valid client identity is required." });
       return;
     }
 
-    if (room.users.size >= 2) {
-      callback?.({ success: false, error: "This chat already has two people." });
+    const cleanDisplayName = validName(name);
+    if (!cleanDisplayName) {
+      callback?.({ success: false, error: "Enter a name between 1 and 24 characters." });
       return;
+    }
+
+    const existing = room.users.get(stableClientId);
+    if (!existing && room.users.size >= 10) {
+      callback?.({ success: false, error: "This room is full (10 participants maximum)." });
+      return;
+    }
+
+    const previousRoomId = socket.data.roomId;
+    if (previousRoomId && previousRoomId !== roomId) {
+      const previousRoom = rooms.get(previousRoomId);
+      const previousUser = previousRoom?.users.get(socket.data.clientId);
+      if (previousUser?.socketId === socket.id) {
+        previousRoom.users.delete(socket.data.clientId);
+        socket.leave(previousRoomId);
+        socket.to(previousRoomId).emit("user-left", {
+          clientId: previousUser.clientId,
+          name: previousUser.name,
+          users: publicUsers(previousRoom),
+        });
+        if (previousRoom.users.size === 0) rooms.delete(previousRoomId);
+      }
     }
 
     const user = {
       socketId: socket.id,
       clientId: stableClientId,
-      name: cleanName(name),
+      name: cleanDisplayName,
     };
 
-    room.users.set(socket.id, user);
+    // A reconnect or duplicate tab for the same stable browser identity replaces
+    // its prior connection without consuming another participant slot.
+    if (existing && existing.socketId !== socket.id) {
+      const oldSocket = io.sockets.sockets.get(existing.socketId);
+      if (oldSocket) {
+        oldSocket.leave(roomId);
+        oldSocket.data.roomId = null;
+        oldSocket.data.clientId = null;
+      }
+    }
+    room.users.set(stableClientId, user);
     socket.join(roomId);
     socket.data.roomId = roomId;
+    socket.data.clientId = stableClientId;
 
     callback?.({
       success: true,
       roomId,
       messages: room.messages,
-      users: [...room.users.values()].map(({ socketId, name }) => ({
-        socketId,
-        name,
-      })),
+      users: publicUsers(room),
     });
 
-    socket.to(roomId).emit("user-joined", {
-      socketId: socket.id,
-      name: user.name,
-    });
+    if (!existing) socket.to(roomId).emit("user-joined", { clientId: user.clientId, name: user.name, users: publicUsers(room) });
+    else io.to(roomId).emit("participants-updated", publicUsers(room));
   });
 
-  socket.on("send-message", ({ text }, callback) => {
+  socket.on("send-message", (payload, callback) => {
     const roomId = socket.data.roomId;
     const room = rooms.get(roomId);
 
@@ -120,11 +158,15 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const user = room.users.get(socket.id);
-    const messageText = String(text || "").trim().slice(0, 1000);
+    const user = room.users.get(socket.data.clientId);
+    const messageText = typeof payload?.text === "string" ? payload.text.trim() : "";
 
-    if (!user || !messageText) {
-      callback?.({ success: false, error: "Message cannot be empty." });
+    if (!user || user.socketId !== socket.id) {
+      callback?.({ success: false, error: "Join this room before sending messages." });
+      return;
+    }
+    if (!messageText || messageText.length > 1000) {
+      callback?.({ success: false, error: "Messages must be between 1 and 1,000 characters." });
       return;
     }
 
@@ -146,12 +188,13 @@ io.on("connection", (socket) => {
     callback?.({ success: true });
   });
 
-  socket.on("typing", ({ isTyping }) => {
+  socket.on("typing", (payload = {}) => {
+    const { isTyping } = payload;
     const roomId = socket.data.roomId;
     const room = rooms.get(roomId);
-    const user = room?.users.get(socket.id);
+    const user = room?.users.get(socket.data.clientId);
 
-    if (room && user) {
+    if (room && user?.socketId === socket.id) {
       socket.to(roomId).emit("typing", {
         name: user.name,
         isTyping: Boolean(isTyping),
@@ -165,14 +208,13 @@ io.on("connection", (socket) => {
 
     if (!room) return;
 
-    const user = room.users.get(socket.id);
-    room.users.delete(socket.id);
+    const clientId = socket.data.clientId;
+    const user = room.users.get(clientId);
+    if (!user || user.socketId !== socket.id) return;
+    room.users.delete(clientId);
 
     if (user) {
-      socket.to(roomId).emit("user-left", {
-        socketId: socket.id,
-        name: user.name,
-      });
+      socket.to(roomId).emit("user-left", { clientId, name: user.name, users: publicUsers(room) });
     }
 
     // Remove empty rooms so memory stays tiny.
@@ -185,5 +227,5 @@ io.on("connection", (socket) => {
 const PORT = process.env.PORT || 8787;
 
 httpServer.listen(PORT, () => {
-  console.log(`ChatBox server running on http://localhost:${PORT}`);
+  console.log(`ChatBox server listening on port ${PORT}`);
 });

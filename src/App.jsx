@@ -41,7 +41,7 @@ function Home() {
         <p className="eyebrow">PRIVATE • REAL-TIME • SIMPLE</p>
         <h1>ChatBox</h1>
         <p className="subtitle">
-          Create a room, send the link to a friend, and start talking instantly.
+          Create a room, send the link to friends, and start talking instantly.
         </p>
 
         <button className="primary-button" onClick={createRoom} disabled={creating}>
@@ -53,7 +53,7 @@ function Home() {
         <div className="feature-row">
           <span>⚡ Live messages</span>
           <span>🔗 Shareable link</span>
-          <span>👥 2 people</span>
+          <span>👥 up to 10 people</span>
         </div>
       </section>
     </main>
@@ -142,8 +142,8 @@ function Chat() {
   const typingTimerRef = useRef(null);
 
   const [messages, setMessages] = useState([]);
+  const [participants, setParticipants] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [partnerName, setPartnerName] = useState("");
   const [typingName, setTypingName] = useState("");
   const [text, setText] = useState("");
   const [error, setError] = useState("");
@@ -176,8 +176,7 @@ function Chat() {
         // while the join acknowledgement was in flight.
         setMessages((current) => mergeMessages(result.messages || [], current));
 
-        const other = result.users.find((user) => user.socketId !== socket.id);
-        setPartnerName(other?.name || "");
+        setParticipants(result.users || []);
         setConnected(true);
       });
     }
@@ -187,15 +186,21 @@ function Chat() {
     }
 
     function handleUserJoined(user) {
-      setPartnerName(user.name);
+      if (user.users) setParticipants(user.users);
+      else setParticipants((current) => [...current.filter((item) => item.clientId !== user.clientId), user]);
     }
 
-    function handleUserLeft() {
-      setPartnerName("");
+    function handleUserLeft(user) {
+      if (user.users) setParticipants(user.users);
+      else setParticipants((current) => current.filter((item) => item.clientId !== user.clientId));
       setTypingName("");
     }
 
-    function handleTyping({ name: typingUser, isTyping }) {
+    function handleParticipantsUpdated(users) {
+      setParticipants(users || []);
+    }
+
+    function handleTyping({ name: typingUser, isTyping } = {}) {
       setTypingName(isTyping ? typingUser : "");
     }
 
@@ -208,6 +213,7 @@ function Chat() {
     socket.on("new-message", handleNewMessage);
     socket.on("user-joined", handleUserJoined);
     socket.on("user-left", handleUserLeft);
+    socket.on("participants-updated", handleParticipantsUpdated);
     socket.on("typing", handleTyping);
     socket.on("disconnect", handleDisconnect);
     socket.connect();
@@ -218,6 +224,7 @@ function Chat() {
       socket.off("new-message", handleNewMessage);
       socket.off("user-joined", handleUserJoined);
       socket.off("user-left", handleUserLeft);
+      socket.off("participants-updated", handleParticipantsUpdated);
       socket.off("typing", handleTyping);
       socket.off("disconnect", handleDisconnect);
       if (socketRef.current === socket) socketRef.current = null;
@@ -298,7 +305,7 @@ function Chat() {
             <h1>ChatBox</h1>
             <p>
               <span className={`status-dot ${connected ? "online" : ""}`} />
-              {partnerName ? `Chatting with ${partnerName}` : "Waiting for your friend..."}
+              {connected ? `${participants.length} of 10 participants` : "Connecting..."}
             </p>
           </div>
           <button className="share-button" onClick={copyLink}>
@@ -307,16 +314,27 @@ function Chat() {
         </header>
 
         <div className="room-banner">
-          <span>🔗 Send this room link to your friend</span>
+          <span>🔗 Share this room link</span>
           <button onClick={copyLink}>{copied ? "Copied" : "Copy"}</button>
         </div>
+
+        <aside className="participants" aria-label="Participants in this room">
+          <strong>Participants</strong>
+          <div className="participant-list">
+            {participants.map((participant) => (
+              <span key={participant.clientId} className="participant-chip">
+                {participant.name}{participant.clientId === clientId ? " (you)" : ""}
+              </span>
+            ))}
+          </div>
+        </aside>
 
         <section className="messages" aria-live="polite">
           {messages.length === 0 && (
             <div className="empty-chat">
               <div>👋</div>
               <strong>You're in!</strong>
-              <p>Send the room link to your friend and start the conversation.</p>
+              <p>Share the room link and start the conversation.</p>
             </div>
           )}
 

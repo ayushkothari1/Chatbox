@@ -1,6 +1,6 @@
-# ChatBox — Real-Time 1-to-1 Chat Application
+# ChatBox — Real-Time Group Chat
 
-ChatBox is a lightweight browser chat for two people. One person creates a room and shares its link; the other opens that link and chooses a display name. Messages are relayed in real time through a Node.js and Socket.IO server, so neither person needs to refresh the page.
+ChatBox is a lightweight browser chat for groups of up to 10 simultaneously connected participants. A user creates a room and shares its link; invitees open that link and choose display names. Messages are relayed in real time through a Node.js and Socket.IO server, so nobody needs to refresh the page.
 
 ChatBox is designed for a short, direct conversation rather than an account-based messaging service. Rooms and their recent messages exist in server memory only; there is no database or user authentication.
 
@@ -8,7 +8,7 @@ ChatBox is designed for a short, direct conversation rather than an account-base
 
 [Open ChatBox](https://chatbox-1-rx9b.onrender.com/)
 
-To try it with someone else, select **Create Chat**, then share the room URL using **Share link** or **Copy**. The other person opens the link, enters a display name, and joins. A room accepts up to two connected participants. The supplied URL is documented here as the project demo; I could not independently verify its availability while preparing this README.
+Select **Create Chat**, then share the room URL using **Share link** or **Copy**. Anyone with the link can enter a display name and join while the room has fewer than 10 connected participants. Rooms remain in server memory and are removed when empty.
 
 ## Features
 
@@ -17,10 +17,10 @@ To try it with someone else, select **Create Chat**, then share the room URL usi
 - Send and receive messages in real time without refreshing.
 - Show each message on the sender's or other participant's side, based on a browser client ID.
 - Display the sender's name and a locally formatted time for each message.
-- Show when the other participant is typing and whether someone is in the room.
+- Show when another participant is typing and list everyone currently in the room.
 - Copy the room link from the chat screen.
 - Responsive layout for narrow and wide screens.
-- Limit each room to two connected people and each message to 1,000 characters.
+- Limit each room to 10 connected participants and each message to 1,000 characters.
 - Keep up to 100 recent messages in memory for an active room.
 
 ## Tech Stack
@@ -36,11 +36,11 @@ To try it with someone else, select **Create Chat**, then share the room URL usi
 
 ## How ChatBox Works
 
-1. A visitor selects **Create Chat**. The frontend sends `POST /api/rooms` to the server, which creates a short random room ID and initializes in-memory room state.
+1. A visitor selects **Create Chat**. The frontend sends `POST /api/rooms` to the server, which creates a 128-bit random room ID and initializes in-memory room state.
 2. The browser navigates to `/room/:roomId`. The user chooses a display name and continues to `/room/:roomId/chat?name=...`.
 3. The chat page reads or creates a browser client ID in `localStorage`, then opens a Socket.IO connection to the server.
-4. On connection, the frontend emits `join-room` with the room ID, name, and client ID. The server checks that the room exists and has fewer than two connected users, adds the socket to the Socket.IO room, and acknowledges with the current message snapshot and connected users.
-5. The sender emits `send-message`. The server validates the connected user and non-empty text, attaches the sender's client ID and name plus a timestamp, retains the message in the room's memory list, then emits `new-message` to everyone in that room.
+4. On connection, the frontend emits `join-room` with the room ID, name, and client ID. The server validates the room, name, stable identity, and capacity, adds the socket to the Socket.IO room, and acknowledges with the current message snapshot and connected users.
+5. The sender emits `send-message`. The server validates room membership and message length, attaches the sender's stable client ID and name plus a unique message ID and timestamp, retains the message in the room's memory list, then emits `new-message` to everyone in that room.
 6. Each frontend adds the message to its list. It compares `senderId` with its own client ID to render the message on the correct side.
 
 The server does not provide private accounts or durable conversation history. The room URL is the means of invitation, and the server relays data to sockets joined to that room.
@@ -53,7 +53,7 @@ The server does not provide private accounts or durable conversation history. Th
 - **Node.js** runs Express and the HTTP server to which Socket.IO is attached.
 - **Socket.IO** manages live connections, room membership, participant presence, typing updates, and message delivery. It provides event-based two-way communication and can reconnect a client automatically; the client attempts to join the room again on each connection.
 
-In development, Vite serves the frontend and proxies `/api` and `/socket.io` to the backend at `localhost:8787`. In production, the client defaults to the current page's origin and Express serves both the built frontend and Socket.IO from the same service. The client also supports the `VITE_SERVER_URL` build-time setting; it is not required for the documented same-origin setup.
+In development, Vite serves the frontend and proxies `/api` and `/socket.io` to the backend at `localhost:8787`. In production, the client defaults to the current page's origin and Express serves both the built frontend and Socket.IO from the same service. The client also supports the `VITE_SERVER_URL` build-time setting; it is not required for the documented same-origin setup. The server listens on the port provided by Render's `PORT` environment variable, with `8787` as the local default.
 
 ## Message Flow
 
@@ -80,14 +80,14 @@ The Socket.IO server accepts connections and the client registers these events:
 | Event | Direction | Purpose and data |
 | --- | --- | --- |
 | `join-room` | Client → server | `{ roomId, name, clientId }`; acknowledgement is `{ success, roomId, messages, users }`, or `{ success: false, error }`. |
-| `user-joined` | Server → other room members | `{ socketId, name }` when a participant joins. |
+| `user-joined` | Server → other room members | `{ clientId, name, users }` when a participant joins. |
 | `send-message` | Client → server | `{ text }`; acknowledgement reports success or an error. The sender is taken from the joined socket's server-side room membership. |
 | `new-message` | Server → all room members | `{ id, text, senderId, senderName, createdAt }`. `createdAt` is an ISO timestamp. |
-| `typing` | Client ↔ server | Client sends `{ isTyping }`; server forwards `{ name, isTyping }` to the other room member. The frontend clears typing after about 1.2 seconds without input. |
-| `user-left` | Server → other room members | `{ socketId, name }` when a joined socket disconnects. |
+| `typing` | Client ↔ server | Client sends `{ isTyping }`; server forwards `{ name, isTyping }` to other room members. The frontend clears typing after about 1.2 seconds without input. |
+| `user-left` | Server → other room members | `{ clientId, name, users }` when a joined socket disconnects. |
 | `disconnect` | Socket.IO lifecycle | The server removes the socket from its room's participant map and deletes the room if it becomes empty. The client marks itself disconnected. |
 
-The server assigns a random UUID to each message. It trims message text and limits it to 1,000 characters. User names are trimmed and limited to 24 characters. The browser's `chatbox-client-id` value is created with `crypto.randomUUID()` and saved in `localStorage`; the server uses this client ID to label the sender, while the socket ID tracks the current connection.
+The server assigns a random UUID to each message. It trims message text and limits it to 1,000 characters. User names are trimmed, required, and limited to 24 characters. Room IDs contain 128 bits of random data and are validated on join. The browser's `chatbox-client-id` value is created with `crypto.randomUUID()` and saved in `localStorage`; the server uses this stable ID to label the sender and track one active connection across reconnects.
 
 ## Backend and API
 
@@ -146,7 +146,7 @@ npm run server
 npm run client
 ```
 
-The Vite proxy forwards API and Socket.IO traffic to the local backend. To try a two-person conversation locally, create a room in one browser and open its copied link in another browser window or profile on the same computer.
+The Vite proxy forwards API and Socket.IO traffic to the local backend. To try a group conversation locally, create a room in one browser and open its copied link in other browser windows or profiles on the same computer.
 
 ## Available Scripts
 
@@ -178,7 +178,7 @@ There is no Render configuration file in the repository, so these are documented
 ## Known Limitations
 
 - Rooms and messages are temporary in-memory state, cleared when the room empties or the server restarts.
-- A room only allows two connected sockets. A third connection is rejected while both places are occupied.
+- A room allows up to 10 connected participants. Additional joins receive a room-full error.
 - The room link is the only invitation mechanism; there is no login or private-room authorization.
 - A browser-generated client ID is used to distinguish a user's messages, but it is not authenticated. It identifies a browser profile, not a verified person.
 - There is no durable message archive, end-to-end encryption, or offline message delivery.

@@ -298,6 +298,34 @@ h1 {
   background: #18181b;
 }
 
+.participants {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid #18181b;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.participants > strong {
+  flex: 0 0 auto;
+  color: #d4d4d8;
+}
+
+.participant-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.participant-chip {
+  padding: 4px 8px;
+  border: 1px solid #27272a;
+  border-radius: 999px;
+  background: #18181b;
+}
+
 .messages {
   flex: 1;
   padding: 28px 20px;
@@ -423,6 +451,11 @@ h1 {
   }
 
   .room-banner {
+    padding: 9px 14px;
+  }
+
+  .participants {
+    align-items: flex-start;
     padding: 9px 14px;
   }
 
