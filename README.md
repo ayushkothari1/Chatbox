@@ -1,102 +1,40 @@
-# ChatBox — Real-Time Group Chat
+# ChatBox
 
-ChatBox is a lightweight browser chat for groups of up to 10 simultaneously connected participants. A user creates a room and shares its link; invitees open that link and choose display names. Messages are relayed in real time through a Node.js and Socket.IO server, so nobody needs to refresh the page.
+ChatBox is a real-time group messaging web application built with React, Vite, Node.js, Express, and Socket.IO. Create a room, share its invitation link, and start a live conversation with up to 10 participants—no page refresh required.
 
-ChatBox is designed for a short, direct conversation rather than an account-based messaging service. Rooms and their recent messages exist in server memory only; there is no database or user authentication.
-
-## Live Demo
-
-[Open ChatBox](https://chatbox-1-rx9b.onrender.com/)
-
-Select **Create Chat**, then share the room URL using **Share link** or **Copy**. Anyone with the link can enter a display name and join while the room has fewer than 10 connected participants. Rooms remain in server memory and are removed when empty.
+The project brings together a responsive chat interface and a room-aware real-time server. Building it involved connecting a React client to Socket.IO events, managing room membership and message delivery on the server, and serving the production frontend from the same Express application.
 
 ## Features
 
-- Create a room and invite someone with a shareable URL.
-- Join with a display name (up to 24 characters; blank names become “Friend”).
-- Send and receive messages in real time without refreshing.
-- Show each message on the sender's or other participant's side, based on a browser client ID.
-- Display the sender's name and a locally formatted time for each message.
-- Show when another participant is typing and list everyone currently in the room.
-- Copy the room link from the chat screen.
-- Responsive layout for narrow and wide screens.
-- Limit each room to 10 connected participants and each message to 1,000 characters.
-- Keep up to 100 recent messages in memory for an active room.
+- Create rooms and invite others with a shareable room link.
+- Chat with up to 10 participants in each room.
+- Send and receive messages in real time through Socket.IO.
+- Choose a display name before joining.
+- View the room's current participant list.
+- See when another participant is typing.
+- Keep conversations isolated by room.
+- Use the responsive interface on narrow and wide screens.
+- View up to 100 recent messages in an active room; the server keeps them in memory.
 
 ## Tech Stack
 
-| Area | Technologies |
+| Technology | Role |
 | --- | --- |
-| Frontend | React 19, React DOM, React Router, Vite |
-| Backend | Node.js, Express 5 |
-| Real-time communication | Socket.IO 4 server and client |
-| Styling | CSS, DM Sans and Space Grotesk web fonts |
-| Development tools | Vite React plugin, concurrently, npm |
-| Deployment model | Express serves the Vite production build; the existing README describes a single Render web service |
+| React | Builds the home, join, and chat screens and manages interface state. |
+| Vite | Runs the frontend development server and creates the production build. |
+| Node.js | Runs the server-side JavaScript application. |
+| Express | Provides the room creation and health endpoints and serves the production frontend. |
+| Socket.IO | Handles live connections, room membership, participant updates, typing events, and message delivery. |
+| React Router | Routes users between the home, room invitation, and chat screens. |
+| CSS | Styles the responsive chat interface. |
 
-## How ChatBox Works
+## How It Works
 
-1. A visitor selects **Create Chat**. The frontend sends `POST /api/rooms` to the server, which creates a 128-bit random room ID and initializes in-memory room state.
-2. The browser navigates to `/room/:roomId`. The user chooses a display name and continues to `/room/:roomId/chat?name=...`.
-3. The chat page reads or creates a browser client ID in `localStorage`, then opens a Socket.IO connection to the server.
-4. On connection, the frontend emits `join-room` with the room ID, name, and client ID. The server validates the room, name, stable identity, and capacity, adds the socket to the Socket.IO room, and acknowledges with the current message snapshot and connected users.
-5. The sender emits `send-message`. The server validates room membership and message length, attaches the sender's stable client ID and name plus a unique message ID and timestamp, retains the message in the room's memory list, then emits `new-message` to everyone in that room.
-6. Each frontend adds the message to its list. It compares `senderId` with its own client ID to render the message on the correct side.
-
-The server does not provide private accounts or durable conversation history. The room URL is the means of invitation, and the server relays data to sockets joined to that room.
-
-## Application Architecture
-
-- **React** renders the home, join, and chat screens and manages their interface state.
-- **React Router** maps `/`, `/room/:roomId`, and `/room/:roomId/chat` to those screens.
-- **Express** creates rooms through its HTTP API, provides a health endpoint, and serves the built frontend in production.
-- **Node.js** runs Express and the HTTP server to which Socket.IO is attached.
-- **Socket.IO** manages live connections, room membership, participant presence, typing updates, and message delivery. It provides event-based two-way communication and can reconnect a client automatically; the client attempts to join the room again on each connection.
-
-In development, Vite serves the frontend and proxies `/api` and `/socket.io` to the backend at `localhost:8787`. In production, the client defaults to the current page's origin and Express serves both the built frontend and Socket.IO from the same service. The client also supports the `VITE_SERVER_URL` build-time setting; it is not required for the documented same-origin setup. The server listens on the port provided by Render's `PORT` environment variable, with `8787` as the local default.
-
-## Message Flow
-
-```mermaid
-sequenceDiagram
-    participant A as User A
-    participant FA as User A frontend
-    participant S as Express / Socket.IO server
-    participant FB as User B frontend
-    participant B as User B
-    A->>FA: Type and send a message
-    FA->>S: send-message { text }
-    S->>S: Validate sender and text; add sender ID and timestamp
-    S-->>FA: new-message (room broadcast)
-    S-->>FB: new-message (room broadcast)
-    FA-->>A: Render as own message
-    FB-->>B: Render as other participant's message
-```
-
-## Real-Time Communication
-
-The Socket.IO server accepts connections and the client registers these events:
-
-| Event | Direction | Purpose and data |
-| --- | --- | --- |
-| `join-room` | Client → server | `{ roomId, name, clientId }`; acknowledgement is `{ success, roomId, messages, users }`, or `{ success: false, error }`. |
-| `user-joined` | Server → other room members | `{ clientId, name, users }` when a participant joins. |
-| `send-message` | Client → server | `{ text }`; acknowledgement reports success or an error. The sender is taken from the joined socket's server-side room membership. |
-| `new-message` | Server → all room members | `{ id, text, senderId, senderName, createdAt }`. `createdAt` is an ISO timestamp. |
-| `typing` | Client ↔ server | Client sends `{ isTyping }`; server forwards `{ name, isTyping }` to other room members. The frontend clears typing after about 1.2 seconds without input. |
-| `user-left` | Server → other room members | `{ clientId, name, users }` when a joined socket disconnects. |
-| `disconnect` | Socket.IO lifecycle | The server removes the socket from its room's participant map and deletes the room if it becomes empty. The client marks itself disconnected. |
-
-The server assigns a random UUID to each message. It trims message text and limits it to 1,000 characters. User names are trimmed, required, and limited to 24 characters. Room IDs contain 128 bits of random data and are validated on join. The browser's `chatbox-client-id` value is created with `crypto.randomUUID()` and saved in `localStorage`; the server uses this stable ID to label the sender and track one active connection across reconnects.
-
-## Backend and API
-
-Express exposes two HTTP routes:
-
-- `GET /api/health` returns `{ "ok": true, "service": "ChatBox server" }`.
-- `POST /api/rooms` creates a room and returns `{ "success": true, "roomId": "..." }`.
-
-There is no HTTP message endpoint: chat messages and typing updates use Socket.IO. The server uses CORS middleware and configures Socket.IO CORS for any origin. Invalid room joins, full rooms, missing client identities, empty messages, and missing rooms are reported through the relevant Socket.IO acknowledgement. A failed room creation request is shown by the frontend as a server connection error.
+1. A visitor selects **Create Chat**. The client calls `POST /api/rooms`, and the server creates a room with a unique ID.
+2. The creator is taken to the room invitation page. They choose a display name and enter the chat.
+3. The room URL can be copied and shared. Invitees open it, choose a display name, and join the same room.
+4. The browser connects to the Socket.IO server and joins the room. The server checks that the room exists and has capacity, then returns its current participants and recent messages.
+5. When a participant sends a message, the server validates it and broadcasts it only to sockets in that room. The other participants see it immediately.
 
 ## Project Structure
 
@@ -104,94 +42,69 @@ There is no HTTP message endpoint: chat messages and typing updates use Socket.I
 .
 ├── index.html          # Vite HTML entry point and page metadata
 ├── package.json        # Dependencies and npm scripts
-├── package-lock.json   # Locked npm dependency versions
+├── package-lock.json   # Locked dependency versions
 ├── vite.config.js      # React plugin, build output, and development proxies
 ├── server/
-│   └── index.js        # Express routes, Socket.IO events, and static serving
+│   └── index.js        # Express API, Socket.IO events, and static frontend serving
 └── src/
     ├── App.jsx         # Routes, room creation/joining, and chat interface
     ├── main.jsx        # React entry point and BrowserRouter setup
     └── style.css       # Responsive interface styles
 ```
 
-The production frontend build is written to `dist/` by Vite. It is generated output and is served by Express when running the production server.
+Vite writes the production frontend to `dist/`. The Express server serves those built files in production.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js and npm (use a Node.js release compatible with the installed Vite version).
-- Git, to clone the repository.
+- Node.js **20.19+** or **22.12+**, as required by the installed Vite toolchain.
+- npm.
 
-### Install and run
+### Install and run locally
 
-From a terminal in the cloned project directory (PowerShell, Command Prompt, macOS, and Linux shells all work):
+Clone the repository, then run these commands from the project directory:
 
 ```bash
-git clone <repository-url>
-cd <repository-directory>
 npm install
 npm run dev
 ```
 
-`npm run dev` starts the Express/Socket.IO server and Vite client together. Open <http://localhost:5173>. The backend listens on port `8787` by default. Keep the terminal running while using the app.
+The development command starts the Vite client and the Express/Socket.IO server together. Open <http://localhost:5173>. The backend listens on port `8787` by default, and Vite proxies API and Socket.IO requests to it.
 
-To run the two processes separately, open two terminals in the project directory:
+## Production Build
 
-```bash
-npm run server
-```
+Build the frontend with the project’s production script:
 
 ```bash
-npm run client
+npm run build
 ```
 
-The Vite proxy forwards API and Socket.IO traffic to the local backend. To try a group conversation locally, create a room in one browser and open its copied link in other browser windows or profiles on the same computer.
+This writes the static frontend to `dist/`. To run the production application locally, start the Express server after building:
 
-## Available Scripts
+```bash
+npm start
+```
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Starts `server` and `client` together using `concurrently`. |
-| `npm run client` | Starts the Vite development server. |
-| `npm run server` | Runs `node server/index.js`. |
-| `npm run build` | Builds the frontend into `dist/`. |
-| `npm start` | Runs the Express/Socket.IO server; build first so the frontend exists in `dist/`. |
-| `npm run preview` | Starts Vite's local preview server for a production build. It does not start the Express/Socket.IO backend. |
+The server serves both the built frontend and Socket.IO. It uses the `PORT` environment variable when set and defaults to `8787` otherwise. `npm run preview` starts Vite’s frontend preview server; it does not start the chat backend.
 
-## Data Storage and Privacy
+## Live Demo
 
-Room membership and messages are stored in a JavaScript `Map` on the server. Each active room retains at most its latest 100 messages. The room is removed when its last connected participant disconnects, and a server restart clears every room and its messages. There is no database, account system, or browser-stored message history. Only the generated client ID is persisted in browser `localStorage` to identify the sender across that browser's chat sessions.
-
-The room ID is a random value used in a shareable URL, but the application does not implement authentication or a separate access-control check for invitees. Anyone with the room link can attempt to join while a place is available. The code does not implement end-to-end encryption; use it with that limitation in mind.
+The previous README listed [https://chatbox-1-rx9b.onrender.com/](https://chatbox-1-rx9b.onrender.com/) as the deployment URL. I could not verify that it is currently reachable, so treat the link as unconfirmed.
 
 ## Deployment
 
-The checked-in server code serves the Vite output from `dist/` and serves Socket.IO on the same HTTP server. The existing README describes deploying that architecture as one Render web service with:
+ChatBox is structured for a single Render web service: Express serves the Vite build and hosts Socket.IO on the same HTTP server. Connect the GitHub repository to Render and configure the service to build and start with the project’s npm commands:
 
-- Build command: `npm install && npm run build`
-- Start command: `npm start`
-- Render-provided `PORT` (the server falls back to `8787` locally)
+| Render setting | Command |
+| --- | --- |
+| Build command | `npm run build` |
+| Start command | `npm start` |
 
-There is no Render configuration file in the repository, so these are documented commands rather than independently verified service settings. The frontend uses the deployed page's origin by default, so the single-service setup does not require a separate public frontend and backend URL.
+Render supplies the `PORT` value used by the server. There is no Render configuration file in the repository; these commands reflect the checked-in npm scripts and server implementation.
 
-## Known Limitations
+## Future Enhancements
 
-- Rooms and messages are temporary in-memory state, cleared when the room empties or the server restarts.
-- A room allows up to 10 connected participants. Additional joins receive a room-full error.
-- The room link is the only invitation mechanism; there is no login or private-room authorization.
-- A browser-generated client ID is used to distinguish a user's messages, but it is not authenticated. It identifies a browser profile, not a verified person.
-- There is no durable message archive, end-to-end encryption, or offline message delivery.
-- `npm run preview` previews only the frontend build; chat functionality requires the Express/Socket.IO server as well.
-
-## Future Improvements
-
-Possible future work includes database-backed message history, authentication and stronger room access controls, a more robust typing indicator lifecycle, read receipts, and more explicit reconnection and connection-error recovery. These are ideas for later development and are not current features unless described above.
-
-## Contributing
-
-Contributions are welcome. Open an issue to discuss a substantial change, or submit a pull request with a clear description of the change and how it was checked. Keep changes focused and update this README when user-visible behavior or setup instructions change.
-
-## License
-
-No license file or license declaration is present in the repository, so it does not specify reuse terms.
+- Add optional accounts and room access controls.
+- Persist conversations across server restarts.
+- Add message reactions or read receipts.
